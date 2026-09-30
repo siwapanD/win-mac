@@ -41,7 +41,7 @@ in the same commit** (spec §32: every packet is versioned, major mismatch ⇒ r
 | 8 | CursorState | H→C | reserved (client renders cursor locally, spec §16) |
 | 9 | Clipboard | both | reserved (QUIC stream in production) |
 | 10 | Control | C→H | op u8: 1 requestKeyFrame, 2 setFrameRate, 3 setResolution |
-| 11 | Heartbeat | both | empty |
+| 11 | Heartbeat | both | sender's monotonic timestampUs u64 — receiver **echoes the payload unchanged**; sender computes RTT = now − ts (feeds the adaptive controller, spec §21) |
 | 12 | Stats | both | reserved (telemetry) |
 
 Reliable-flagged packets are sent 3× in dev UDP mode; QUIC moves them to
@@ -56,6 +56,10 @@ full header so the client can reassemble out of order and discard stale
 frames (latest-frame-wins, spec §10/§65). Reassembly rules are regression-
 tested on the host (`PacketizerTests`): frame older than the newest in-flight
 **or completed** frame ⇒ drop; partial frame older than 250 ms ⇒ drop.
+
+`captureTsUs` is the host's monotonic µs at capture instant — a client on the
+same clock domain (loopback test) computes capture→received latency directly;
+cross-machine use compares offset-corrected deltas per session.
 
 ## 5. Capability negotiation (spec §31)
 

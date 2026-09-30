@@ -143,6 +143,12 @@ enum PacketFactory {
         packet(.control, payload: Data([op.rawValue]), sessionID: sessionID, sequence: sequence,
                flags: WireHeader.flagsReliable)
     }
+    /// Heartbeat payload: sender's monotonic µs — the echoed value measures RTT.
+    static func heartbeat(_ senderTsUs: UInt64, sessionID: UInt32, sequence: UInt32) -> Data {
+        var w = ByteWriter()
+        w.u64(senderTsUs)
+        return packet(.heartbeat, payload: w.data, sessionID: sessionID, sequence: sequence)
+    }
     static func hello(_ json: Data, sessionID: UInt32, sequence: UInt32) -> Data {
         packet(.hello, payload: json, sessionID: sessionID, sequence: sequence,
                flags: WireHeader.flagsReliable)

@@ -33,6 +33,10 @@ swift run mac-host encode-test      # HW H.264 encoder check (no permission need
 swift run mac-host capture-test     # SCK→encode, per-second stats (needs Screen Recording)
 swift run mac-host serve            # HP engine on UDP 55443, Auto→VNC fallback
 swift run mac-host serve --mode vnc # VNC proxy on TCP 55444 → macOS Screen Sharing
+
+# loopback integration harness (terminal A + B):
+swift run mac-host serve --mode hp
+swift run mac-host client-test --seconds 6 --expect-video   # 1080p60 smoke (spec §62)
 ```
 
 First run needs **Screen Recording** (and later **Accessibility**) granted to
@@ -48,6 +52,9 @@ missing (spec §27/§45).
 - [x] Wire protocol v1 + packetizer/reassembler (unit-tested; latest-frame-wins)
 - [x] UDP LAN transport on custom port 55443 (QUIC/MsQuic = V1 DoD next step)
 - [x] CGEvent injection + keyframe-request control path
+- [x] Heartbeat echo → RTT measurement (~0.4 ms loopback) feeding the adaptive controller
+- [x] AdaptiveQualityController (§21/§36): degrade fast / recover +5 % with hysteresis, live VT bitrate — 5 unit tests
+- [x] `client-test` loopback harness: handshake + RTT verified end-to-end on this Mac; becomes the 1080p60 smoke test once Screen Recording is granted
 - [x] Apple Screen Sharing coexistence inspector (detect-only, verified on this Mac)
 - [x] VNC fallback via RFB proxy — verified end-to-end handshake
 - [ ] Windows client: MF decode → D3D render → Raw Input (skeleton + implementation notes ready)

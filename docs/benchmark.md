@@ -43,6 +43,28 @@ H.264 High 1920×1080, ffmpeg decode 0 errors.
 Mbps, capture→encode ms. Requires Screen Recording permission for the
 launching terminal app.
 
+## Loopback smoke test (spec §62, host-only)
+
+Full pipeline verification without a Windows client:
+
+```bash
+swift run mac-host serve --mode hp          # terminal A (waits for client)
+swift run mac-host client-test --seconds 6 --expect-video   # terminal B
+```
+
+Measured on this Mac (Screen Recording not yet granted — handshake phase):
+
+```
+handshake: host caps — sck=true h264=true maxFps=120 appleSS=true
+rtt: 6 samples  avg 0.26 ms  max 0.38 ms
+video: SKIP (0 frames — grant Screen Recording on the host for full smoke)
+```
+
+With permission granted, `--expect-video` asserts ≥30 fps displayed, zero
+frame loss, and reports capture→received p50/p95 (monotonic µs, same clock
+domain on loopback). Host side prints per-second FPS/bitrate/RTT plus the
+AdaptiveQualityController decision (`[stable]` / `drop → …` / `recover +5%`).
+
 ## Test matrix to run per milestone (spec §46–§49)
 
 - Network sim: RTT {1,20,50,100} ms × loss {0,0.5,1,3,5} % × jitter 0–30 ms ×

@@ -19,6 +19,8 @@ struct MacHostApp {
                 try await Commands.captureTest(flags)
             case "serve":
                 try await Commands.serve(flags)
+            case "client-test":
+                try await Commands.clientTest(flags)
             case "help", "--help", "-h":
                 printHelp()
             default:
@@ -69,6 +71,12 @@ struct MacHostApp {
                                       Falls back to the VNC proxy with an explicit reason.
                                       flags: --port --vnc-port --mode [auto|hp|vnc]
                                              --width --height --fps --bitrate
+          client-test                 Loopback client that speaks the HP protocol —
+                                      handshake, heartbeat RTT, video reassembly.
+                                      Run against `serve --mode hp`; with Screen
+                                      Recording granted add --expect-video to run
+                                      the 1080p60 smoke test (spec §62).
+                                      flags: --host --port --seconds --expect-video
           help
         """)
     }

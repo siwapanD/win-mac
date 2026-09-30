@@ -7,6 +7,9 @@ struct EncodedFrame {
     var isKeyframe: Bool
     var hasParamSets: Bool
     var pts: CMTime
+    /// Capture timestamp in monotonic µs — measured capture→encode latency is
+    /// `encodeDoneUs - captureTsUs`; also travels in VideoFrameHeader (spec §33).
+    var captureTsUs: UInt64
     var encodeDoneUs: UInt64
 }
 
@@ -28,12 +31,14 @@ final class VideoToolboxEncoder {
     let height: Int
     let fps: Int
     let bitrate: Int
+    private(set) var currentBitrate: Int
 
     var onEncodedFrame: ((EncodedFrame) -> Void)?
 
     private var session: VTCompressionSession?
     private let lock = NSLock()
     private var pendingKeyframeRequest = false
+    private var pendingCaptureTs: [Int64: UInt64] = [:]
 
     private(set) var encodedFrames = 0
     private(set) var keyframes = 0
@@ -54,6 +59,7 @@ final class VideoToolboxEncoder {
         self.height = height
         self.fps = fps
         self.bitrate = bitrate
+        self.currentBitrate = bitrate
 
         var spec: [CFString: Any] = [
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true
@@ -99,9 +105,14 @@ final class VideoToolboxEncoder {
     }
 
     /// Encode one frame. In-flight frames are bounded by the caller (see HP
-    /// session queue policy, spec §10).
-    func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime, forceKeyframe: Bool = false) {
+    /// session queue policy, spec §10). `captureTsUs` correlates the output
+    /// frame back to its capture instant.
+    func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime,
+                forceKeyframe: Bool = false, captureTsUs: UInt64 = 0) {
         guard let session else { return }
+        lock.lock()
+        pendingCaptureTs[pts.value] = captureTsUs
+        lock.unlock()
         var frameProps: CFDictionary?
         if forceKeyframe {
             frameProps = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
@@ -114,6 +125,16 @@ final class VideoToolboxEncoder {
             frameProperties: frameProps,
             sourceFrameRefcon: nil,
             infoFlagsOut: nil)
+    }
+
+    /// Live bitrate change for the adaptive controller (spec §21/§36).
+    func setBitrate(_ bps: Int) {
+        guard let s = session else { return }
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_AverageBitRate,
+                             value: NSNumber(value: bps))
+        lock.lock()
+        currentBitrate = bps
+        lock.unlock()
     }
 
     /// Keyframe is applied on the next encode call (spec §12 triggers:
@@ -197,6 +218,7 @@ final class VideoToolboxEncoder {
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         lock.lock()
+        let captureTsUs = pendingCaptureTs.removeValue(forKey: pts.value) ?? 0
         encodedFrames += 1
         if isKeyframe { keyframes += 1 }
         bytesOut += annexB.count
@@ -204,7 +226,7 @@ final class VideoToolboxEncoder {
 
         onEncodedFrame?(EncodedFrame(
             annexB: annexB, isKeyframe: isKeyframe, hasParamSets: hasParamSets,
-            pts: pts, encodeDoneUs: WireHeader.nowUs()))
+            pts: pts, captureTsUs: captureTsUs, encodeDoneUs: WireHeader.nowUs()))
     }
 
     /// A frame is a keyframe when it does not depend on earlier frames.

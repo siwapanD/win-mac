@@ -51,7 +51,9 @@ final class HighPerformanceRemoteSession: IRemoteSession, @unchecked Sendable {
     private var gotClientCapabilities = false
 
     private var statsTimer: DispatchSourceTimer?
-    private var capturePtsToCaptureTs: [Int64: UInt64] = [:]
+    private var lastRttMs: Double = 0
+    private let rttAccumulator = LatencyAccumulator()
+    private lazy var quality = AdaptiveQualityController(bitrate: bitrate, fps: fps)
 
     init(port: UInt16 = AppleScreenSharingInspector.defaultCustomHPPort,
          width: Int = 1920, height: Int = 1080, fps: Int = 60,
@@ -74,9 +76,9 @@ final class HighPerformanceRemoteSession: IRemoteSession, @unchecked Sendable {
     // MARK: connect / disconnect
 
     func connect() async throws {
-        guard inspector.screenRecordingPermission else {
-            throw SessionError.permissionMissing("Screen Recording")
-        }
+        // Screen Recording preflight happens at capture.start (streaming
+        // phase) — the handshake/control plane must come up regardless so a
+        // client can connect and receive an explicit capability story.
 
         stateMachine.transition(to: .authenticating)
         // Dev-mode auth: sender must speak our wire magic; pairing/TLS lands
@@ -135,9 +137,8 @@ final class HighPerformanceRemoteSession: IRemoteSession, @unchecked Sendable {
 
         capture.onFrame = { [weak self] pixelBuffer, pts in
             guard let self else { return }
-            let key = pts.value
+            let captureTsUs = WireHeader.nowUs()
             self.lock.lock()
-            self.capturePtsToCaptureTs[key] = WireHeader.nowUs()
             let busy = self.inFlightFrames
             self.inFlightFrames += 1
             self.lock.unlock()
@@ -151,7 +152,7 @@ final class HighPerformanceRemoteSession: IRemoteSession, @unchecked Sendable {
                 return
             }
             let force = enc.shouldForceKeyframeOnNextEncode
-            enc.encode(pixelBuffer, pts: pts, forceKeyframe: force)
+            enc.encode(pixelBuffer, pts: pts, forceKeyframe: force, captureTsUs: captureTsUs)
         }
 
         capture.onStopped = { [weak self] error in
@@ -176,8 +177,9 @@ final class HighPerformanceRemoteSession: IRemoteSession, @unchecked Sendable {
             lock.unlock()
         }
 
-        if let captureTs = lock.withLock({ capturePtsToCaptureTs.removeValue(forKey: frame.pts.value) }) {
-            encodeLatency.add(Double(WireHeader.nowUs() &- captureTs) / 1000.0)
+        // capture→encoded latency from the correlated capture timestamp.
+        if frame.captureTsUs > 0 {
+            encodeLatency.add(Double(frame.encodeDoneUs &- frame.captureTsUs) / 1000.0)
         }
 
         lock.lock()
@@ -191,7 +193,7 @@ final class HighPerformanceRemoteSession: IRemoteSession, @unchecked Sendable {
             frameID: id, keyframe: frame.isKeyframe, hasParamSets: frame.hasParamSets,
             codec: .h264, width: width, height: height,
             fpsProfile: UInt8(min(255, fps)),
-            captureTsUs: frame.pts.value > 0 ? UInt64(max(0, frame.pts.value)) : 0,
+            captureTsUs: frame.captureTsUs,
             encodeTsUs: frame.encodeDoneUs)
         let packets = Packetizer.split(
             meta: meta, payload: frame.annexB,
@@ -246,7 +248,14 @@ final class HighPerformanceRemoteSession: IRemoteSession, @unchecked Sendable {
         case .inputScroll:
             if let s = ScrollInput.decode(payload) { injector.inject(scroll: s) }
         case .heartbeat:
-            counters.add("heartbeats")
+            // Echo protocol: payload = sender's monotonic µs (spec §21 RTT feed).
+            var r = ByteReader(payload)
+            if let senderTs = r.u64() {
+                let rttUs = WireHeader.nowUs() &- senderTs
+                lastRttMs = Double(rttUs) / 1000.0
+                rttAccumulator.add(lastRttMs)
+                counters.add("rtt_samples")
+            }
         default:
             counters.add("packets_unexpected_type")
         }
@@ -308,11 +317,33 @@ final class HighPerformanceRemoteSession: IRemoteSession, @unchecked Sendable {
             guard let self else { return }
             self.fpsMeter.tick()
             self.mbpsMeter.tick()
+
+            // Heartbeat keeps RTT fresh for the controller (spec §21).
+            self.lock.lock()
+            self.outgoingSequence &+= 1
+            let beat = PacketFactory.heartbeat(WireHeader.nowUs(),
+                                               sessionID: self.sessionID,
+                                               sequence: self.outgoingSequence)
+            self.lock.unlock()
+            self.transport.send(beat)
+
+            // Adaptive quality tick + live bitrate application (spec §21/§36).
+            let e = self.encodeLatency.snapshot()
+            let decision = self.quality.tick(
+                rttMs: self.lastRttMs, lossPct: 0,
+                encoderInFlight: self.lock.withLock { self.inFlightFrames },
+                encodeMs: e.avg)
+            if decision.bitrate != self.encoder?.currentBitrate {
+                self.encoder?.setBitrate(decision.bitrate)
+            }
+
             let s = self.statistics()
-            print(String(format: "HP  fps=%.1f  bitrate=%.1f Mbps  encode(avg/max)=%.1f/%.1f ms  drops(EncoderQueue)=%.0f  keyframes=%.0f",
-                         s["fps"] ?? 0, s["mbps"] ?? 0,
+            print(String(format: "HP  fps=%.1f  bitrate=%d/%.1f Mbps  encode(avg/max)=%.1f/%.1f ms  rtt=%.1f ms  drops(EncoderQueue)=%.0f  keyframes=%.0f  [%@]",
+                         s["fps"] ?? 0, decision.bitrate / 1_000_000, s["mbps"] ?? 0,
                          s["encode_ms_avg"] ?? 0, s["encode_ms_max"] ?? 0,
-                         s["frames_dropped_encoder_queue"] ?? 0, s["keyframes_sent"] ?? 0))
+                         self.lastRttMs,
+                         s["frames_dropped_encoder_queue"] ?? 0, s["keyframes_sent"] ?? 0,
+                         decision.note))
         }
         timer.resume()
         statsTimer = timer
