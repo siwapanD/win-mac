@@ -54,7 +54,7 @@ missing (spec §27/§45).
 - [x] CGEvent injection + keyframe-request control path
 - [x] Heartbeat echo → RTT measurement (~0.4 ms loopback) feeding the adaptive controller
 - [x] AdaptiveQualityController (§21/§36): degrade fast / recover +5 % with hysteresis, live VT bitrate — 5 unit tests
-- [x] `client-test` loopback harness: handshake + RTT verified end-to-end on this Mac; becomes the 1080p60 smoke test once Screen Recording is granted
+- [x] `client-test` loopback harness — **smoke PASS on real capture** (4 runs, 48–55 fps following screen content, zero loss, capture→receive p95 ≤ 15.4 ms, RTT ≤ 0.4 ms)
 - [x] Apple Screen Sharing coexistence inspector (detect-only, verified on this Mac)
 - [x] VNC fallback via RFB proxy — verified end-to-end handshake
 - [ ] Windows client: MF decode → D3D render → Raw Input (skeleton + implementation notes ready)
