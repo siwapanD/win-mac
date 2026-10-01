@@ -37,7 +37,7 @@ in the same commit** (spec §32: every packet is versioned, major mismatch ⇒ r
 | 4 | Audio | H→C | reserved (Phase 10, Opus) |
 | 5 | InputMouse | C→H | kind u8, buttons u8 (bit0 left, bit1 right, bit2 mid), x f32, y f32 (normalized 0…1) |
 | 6 | InputKey | C→H | down u8, macKeyCode u16, flags u64 (CGEventFlags raw) — **client maps VK→mac** (spec §18) |
-| 7 | InputScroll | C→H | dx f32, dy f32 (lines; positive dy = scroll down) |
+| 7 | InputScroll | C→H | dx f32, dy f32 (lines; positive dy = scroll down; positive dx = scroll **left** — the host feeds dx straight into CGEvent wheel2). The host truncates to whole lines, so the client accumulates and sends integers |
 | 8 | CursorState | H→C | reserved (client renders cursor locally, spec §16) |
 | 9 | Clipboard | both | reserved (QUIC stream in production) |
 | 10 | Control | C→H | op u8: 1 requestKeyFrame, 2 setFrameRate, 3 setResolution |
@@ -46,6 +46,16 @@ in the same commit** (spec §32: every packet is versioned, major mismatch ⇒ r
 
 Reliable-flagged packets are sent 3× in dev UDP mode; QUIC moves them to
 streams 1 (control), 2 (keyboard), 3 (clipboard) per spec §19.
+
+Heartbeats are **host-originated only**: the host treats every inbound
+heartbeat as the echo of its own timestamp, so the client echoes and never
+sends its own (a client clock value would read as a huge RTT).
+
+Input in dev UDP mode (not reliable-flagged, the host does not dedupe):
+key/button **downs** go out once (a duplicate down would type twice);
+key/button **ups** go out twice so one lost datagram cannot leave a key stuck
+on the Mac — a repeated up is a no-op for macOS. Mouse moves coalesce to the
+latest position.
 
 ## 4. VideoFrame payload header — 36 bytes
 
@@ -79,15 +89,44 @@ Client → host:
 Session profile: fps = min(host fps, client maxFps); resolution/bitrate tiers
 per spec §22 (4K 40–80 Mbps, 1440p 20–40, 1080p 10–25 on LAN).
 
-## 6. Keyboard mapping table (spec §18 — fill during Windows client Phase 8)
+## 6. Keyboard mapping table (spec §18)
 
-Client maps Windows VK → macOS virtual keycode (`kVK_ANSI_*`) with
-Mac-friendly mode: Ctrl→Command, Alt→Option, Win→Command (e.g. Ctrl+C =
-Cmd+C keycode 0x08 + CGEventFlagCommand `1<<20`). Physical scancodes are
-preserved for shortcut accuracy.
+The client maps the **physical key** (scancode set 1, E0-extended keys
+distinct) → macOS virtual keycode (`kVK_*`), not the Windows VK: macOS
+keycodes are positional, so the Mac's input source picks the character
+(Thai/English switching happens on the Mac). Full table:
+`windows-client/src/input/MacKeyMap.h`.
+
+| Windows | Mac-friendly (default) | Windows native |
+|---|---|---|
+| Ctrl L/R | Command 0x37 / 0x36 | Control 0x3B / 0x3E |
+| Win L/R | Control 0x3B / 0x3E | Command 0x37 / 0x36 |
+| Alt L/R | Option 0x3A / 0x3D | Option 0x3A / 0x3D |
+| Alt+Tab | Command+Tab (held Alt re-pressed as Command) | Option+Tab |
+
+`flags` = CGEventFlags of the held modifiers (Command `1<<20`, Option
+`1<<19`, Control `1<<18`, Shift `1<<17`) plus what Apple hardware sets
+intrinsically: arrows NumericPad|SecondaryFn, F-keys and the navigation
+cluster SecondaryFn, keypad keys NumericPad. Example: Ctrl+C →
+`0x37` down (Command), `0x08` down with flags `0x100000`.
+
+Non-Mac keys: Insert → Help 0x72, Delete → Forward Delete 0x75, Print Screen
+→ F13, Scroll Lock → F14, Pause → F15, NumLock → keypad Clear, Menu → 0x6E.
+Autorepeat is forwarded for ordinary keys (synthetic CGEvents get no repeat
+from macOS), never for modifiers. Caps Lock is forwarded as a plain key with
+no AlphaShift flag (the Mac owns its caps/input-source state).
 
 ## 7. Keyframe triggers (spec §12)
 
 Client requests `Control/RequestKeyFrame` on: packet-loss burst, decoder
 desync, resolution change, network recovery, session resume. Host GOP is
 keyframe every 1–2 s at 60 fps, 1 s at 120 fps.
+
+Windows client policy: request at session start / host restart (P-frames are
+dropped until the IDR arrives), on any frame-ID gap (decoding continues
+meanwhile), when a partial frame times out at 250 ms (on a static Mac screen
+no later frame may reveal the gap), and on decoder error. Requests are
+rate-limited to one per 300 ms, doubling up to 2 s while no complete keyframe
+arrives in between — an IDR is the largest frame (most datagrams), so under
+heavy loss it is the least likely to arrive whole and faster requests only
+add bitrate (keyframe storm).

@@ -4,8 +4,10 @@
   `mac-host/Tests/MacHostTests/` — wire header round-trip/refusal, frame
   packetization/reassembly (out-of-order, stale, loss), input packet
   round-trips, session state machine paths. Run: `cd mac-host && swift test`.
-- **Windows side**: wire.h mirror must be validated against the same vectors
-  when the client builds (add a C++ unit target reading the same fixtures).
+- **Windows side**: `windows-client/tools/smoke.ps1` — loopback smoke against
+  `fake-host` (handshake, reassembly, DXVA decode, present ≥ 30 fps; `-Loss`
+  simulates packet loss). Still to add: a C++ unit target validating wire.h
+  against the same vectors as the Swift tests.
 - **Network simulator** (spec §46): dummynet profiles — RTT {1,20,50,100} ms,
   loss {0,0.5,1,3,5} %, jitter 0–30 ms, bandwidth 5–100 Mbps; assert no
   unbounded queue growth. To be automated here once the Windows client runs.

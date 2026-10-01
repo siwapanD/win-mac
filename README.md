@@ -39,6 +39,19 @@ swift run mac-host serve --mode hp
 swift run mac-host client-test --seconds 6 --expect-video   # 1080p60 smoke (spec §62)
 ```
 
+## Quick start (Windows client)
+
+Developer PowerShell for VS 2022, in `windows-client/`:
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+.\tools\smoke.ps1                                      # loopback test, no Mac needed
+.\build\Release\windows-client.exe --host <mac-ip>     # against `mac-host serve --mode hp`
+```
+
+Keyboard, options and the `fake-host` test tool: [windows-client/README.md](windows-client/README.md).
+
 First run needs **Screen Recording** (and later **Accessibility**) granted to
 the terminal/app that launches `mac-host`: System Settings → Privacy &
 Security → Screen Recording / Accessibility. `inspect` reports exactly what is
@@ -57,9 +70,10 @@ missing (spec §27/§45).
 - [x] `client-test` loopback harness — **smoke PASS on real capture** (4 runs, 48–55 fps following screen content, zero loss, capture→receive p95 ≤ 15.4 ms, RTT ≤ 0.4 ms)
 - [x] Apple Screen Sharing coexistence inspector (detect-only, verified on this Mac)
 - [x] VNC fallback via RFB proxy — verified end-to-end handshake
-- [ ] Windows client: MF decode → D3D render → Raw Input (skeleton + implementation notes ready)
+- [x] Windows client HP mode: UDP session → MF/DXVA hardware decode → D3D11 flip-model present → keyboard/mouse (scancode → kVK) — **verified on Windows loopback** against `fake-host`: 59–61 fps, decode 0.6–0.8 ms, frame age at present ~2 ms, 0 loss; survives 2 % loss and host restart (docs/benchmark.md)
+- [ ] First Windows client ↔ real Mac run (`serve --mode hp` + `windows-client --host <mac>`)
 - [ ] QUIC/TLS 1.3 + pairing (security roadmap in docs/security.md)
-- [ ] 30-minute stability run with real Windows client (pending client build)
+- [ ] 30-minute stability run with real Windows client
 
 ## Roadmap (spec §41 phases)
 
