@@ -75,6 +75,34 @@ while playing a video to see it.
 at 1080p, encode avg 5.55 ms (budget 16.67 ms) → encoder headroom for 120 FPS
 experiments (§13).
 
+## Windows client loopback (fake-host) — 2026-10-01
+
+Full Windows pipeline on one PC, no Mac: `windows-client/tools/fake-host.exe`
+(protocol stand-in for `serve --mode hp`, looped synthetic 1080p H.264 clip:
+colour bands, moving bar, noise patch; keyframe ~46 KB / 40 datagrams, CBR
+target 12 Mbps) → `windows-client.exe --host 127.0.0.1`. Machine: Windows 11
+Pro 26200, Intel Arc 140T (DXVA decode), 240 Hz display, vsync on.
+
+| Scenario | Shown fps | Mbps | Decode | age@present avg / max (steady) | Lost frames | Result |
+|---|---|---|---|---|---|---|
+| Clean, 8 s | 59–61 | 0.7 (pre-noise clip) | 0.8 ms | 2.4 / 3–8 ms | 0 | smoke PASS |
+| Clean, noise clip, 10 s | 59–61 | 17.2–17.7 | 0.6–0.8 ms | 2.0 / 3–5 ms | 0 | PASS |
+| 2 % packet loss, 8 s | 27–36 | 16–20 | 0.6–0.9 ms | 2.3 / 3–8 ms | 202 / 464 | PASS, no stall, 18 keyframe requests |
+| Host restarted mid-session | 60 after resume | — | — | — | 0 | re-handshake + decoder resync, no client restart |
+| No host | — | — | — | — | — | hint after 5 s, exit 2 |
+
+`age@present` is client-side only: last datagram of a frame → `Present`
+returned (reassembly + queue + decode + render wait). First-second maxima
+(35–55 ms) are decoder/swapchain warm-up. At 2 % loss a ~29-datagram frame
+survives only ~56 % of the time without FEC, which matches the shown fps;
+real LAN loss is near zero. Input path verified with SendInput through the
+keyboard hook: letters, Ctrl+C → Cmd+C, Shift, arrows (fn/numpad flags),
+clicks at normalized (0.5, 0.5), wheel → 3 lines, Ctrl+Alt+Enter not
+forwarded, fullscreen Alt+Tab → Cmd+Tab, every down matched by an up.
+
+Pending: the same run against a real Mac (`serve --mode hp`) — adds the
+network and host capture/encode legs to the latency picture.
+
 ## Test matrix to run per milestone (spec §46–§49)
 
 - Network sim: RTT {1,20,50,100} ms × loss {0,0.5,1,3,5} % × jitter 0–30 ms ×
